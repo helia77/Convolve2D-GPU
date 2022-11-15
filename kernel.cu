@@ -17,16 +17,15 @@ static void HandleError(cudaError_t err, const char* file, int line) {
 // ------------------------------------------------------------------------------------------- //
 
 
-// convolution kernel along x running on device (without shared memory)
-__global__ void kernelConvolution_x_ns(char* C, char* A, float* B, int M, int N, int M_x, int N_x, int K) {
+// convolution kernel along x running on device
+__global__ void dev_convolve_x(char* C, char* A, float* B, int M, int N, int M_x, int N_x, int K) {
     size_t i = blockDim.y * blockIdx.y + threadIdx.y;	// calculate the i (row) index, point to the outMatrix
     size_t j = blockDim.x * blockIdx.x + threadIdx.x;	// calculate the j (column) index, point to the outMatrix
     if (i >= M_x || j >= N_x) return;
     // initialize the register c to store the results
     float c[3];
-    for (int x = 0; x < 3; x++) {
+    for (int x = 0; x < 3; x++)
         c[x] = 0;
-    }
     //kernelConvolution_x_ns<<<blocks, threads>>>(gpu_outArray_x, gpu_inArray, gpu_gKernel, height, width, height_x, width_x, k_size);
     // apply the convolution with Gaussian kernel along x axis
     for (int k = 0; k < K; k++) {
@@ -35,28 +34,27 @@ __global__ void kernelConvolution_x_ns(char* C, char* A, float* B, int M, int N,
         c[2] += (float)A[3 * (i * N + j + k) + 2] * B[k];
     }
     // copy results from register to outMatrix
-    C[3 * (i * N_x + j)] = (unsigned char)c[0];
-    C[3 * (i * N_x + j) + 1] = (unsigned char)c[1];
-    C[3 * (i * N_x + j) + 2] = (unsigned char)c[2];
+    C[3 * (i * N_x + j)] = (char)c[0];
+    C[3 * (i * N_x + j) + 1] = (char)c[1];
+    C[3 * (i * N_x + j) + 2] = (char)c[2];
 }
 
-// convolution kernel along y running on device (without shared memory), same as kernelConvolution_x_ns
-__global__ void kernelConvolution_y_ns(char* C, char* A, float* B, int M, int N, int M_y, int N_y, int K) {
+// convolution kernel along y running on device
+__global__ void dev_convolve_y(char* C, char* A, float* B, int M, int N, int M_y, int N_y, int K) {
     size_t i = blockDim.y * blockIdx.y + threadIdx.y;
     size_t j = blockDim.x * blockIdx.x + threadIdx.x;
     if (i >= M_y || j >= N_y) return;
     float c[3];
-    for (int x = 0; x < 3; x++) {
+    for (int x = 0; x < 3; x++)
         c[x] = 0;
-    }
     for (int k = 0; k < K; k++) {
         c[0] += (float)A[3 * ((i + k) * N + j)] * B[k];
         c[1] += (float)A[3 * ((i + k) * N + j) + 1] * B[k];
         c[2] += (float)A[3 * ((i + k) * N + j) + 2] * B[k];
     }
-    C[3 * (i * N_y + j)] = (unsigned char)c[0];
-    C[3 * (i * N_y + j) + 1] = (unsigned char)c[1];
-    C[3 * (i * N_y + j) + 2] = (unsigned char)c[2];
+    C[3 * (i * N_y + j)] = (char)c[0];
+    C[3 * (i * N_y + j) + 1] = (char)c[1];
+    C[3 * (i * N_y + j) + 2] = (char)c[2];
 }
 
 
@@ -64,45 +62,41 @@ __global__ void kernelConvolution_y_ns(char* C, char* A, float* B, int M, int N,
 
 
 // convolution kernel along x running on host
-
-void convolution_x(char* C, char* A, float* B, int M, int N, int M_x, int N_x, int K) {
+void host_convolve_x(char* out, char* img, float* gaus, int img_w, int out_h, int out_w, int K) {
     float c[3];
-    for (int i = 0; i < M_x; i++) {										// calculate the i (row) index, point to the outMatrix
-        for (int j = 0; j < N_x; j++) {									// calculate the j (column) index, point to the outMatrix
+    for (int i = 0; i < out_h; i++) {										// calculate the i (row) index, point to the outMatrix
+        for (int j = 0; j < out_w; j++) {									// calculate the j (column) index, point to the outMatrix
             // initialize the register c to store the results
-            for (int x = 0; x < 3; x++) {
-                c[x] = 0;
-            }
+            for (int x = 0; x < 3; x++)     c[x] = 0;
             // apply the convolution with Gaussian kernel along x axis
             for (int k = 0; k < K; k++) {
-                c[0] += (float)A[3 * (i * N + j + k)] * B[k];
-                c[1] += (float)A[3 * (i * N + j + k) + 1] * B[k];
-                c[2] += (float)A[3 * (i * N + j + k) + 2] * B[k];
+                c[0] += (float)img[3 * (i * img_w + j + k)] * gaus[k];
+                c[1] += (float)img[3 * (i * img_w + j + k) + 1] * gaus[k];
+                c[2] += (float)img[3 * (i * img_w + j + k) + 2] * gaus[k];
             }
             // copy results from register to outMatrix
-            C[3 * (i * N_x + j)] = (unsigned char)c[0];
-            C[3 * (i * N_x + j) + 1] = (unsigned char)c[1];
-            C[3 * (i * N_x + j) + 2] = (unsigned char)c[2];
+            out[3 * (i * out_w + j)] = (char)c[0];
+            out[3 * (i * out_w + j) + 1] = (char)c[1];
+            out[3 * (i * out_w + j) + 2] = (char)c[2];
         }
     }
 }
 
 // convolution kernel along y running on host, same as convolution_x
-void convolution_y(char* C, char* A, float* B, int M, int N, int M_y, int N_y, int K) {
+void host_convolve_y(char* out, char* img, float* gaus, int inp_w, int out_h, int out_w, int K) {
     float c[3];
-    for (int j = 0; j < N_y; j++) {
-        for (int i = 0; i < M_y; i++) {
-            for (int x = 0; x < 3; x++) {
-                c[x] = 0;
-            }
+    for (int j = 0; j < out_w; j++) {
+        for (int i = 0; i < out_h; i++) {
+            for (int x = 0; x < 3; x++)     c[x] = 0;
+
             for (int k = 0; k < K; k++) {
-                c[0] += (float)A[3 * ((i + k) * N + j)] * B[k];
-                c[1] += (float)A[3 * ((i + k) * N + j) + 1] * B[k];
-                c[2] += (float)A[3 * ((i + k) * N + j) + 2] * B[k];
+                c[0] += (float)img[3 * ((i + k) * inp_w + j)] * gaus[k];
+                c[1] += (float)img[3 * ((i + k) * inp_w + j) + 1] * gaus[k];
+                c[2] += (float)img[3 * ((i + k) * inp_w + j) + 2] * gaus[k];
             }
-            C[3 * (i * N_y + j)] = (unsigned char)c[0];
-            C[3 * (i * N_y + j) + 1] = (unsigned char)c[1];
-            C[3 * (i * N_y + j) + 2] = (unsigned char)c[2];
+            out[3 * (i * out_w + j)] = (char)c[0];
+            out[3 * (i * out_w + j) + 1] = (char)c[1];
+            out[3 * (i * out_w + j) + 2] = (char)c[2];
         }
     }
 }
@@ -175,8 +169,8 @@ int main(int argc, char* argv[]) {
 
     std::cout << "filename: " << filename << std::endl;
     std::cout << "sigma: " << sigma << std::endl;
-
-    int k_size = 6 * sigma;  //calculate k
+    
+    int k_size = 4 * sigma;
     if (k_size % 2 == 0) k_size++; //make sure k is odd
     float miu = k_size / 2;
 
@@ -196,8 +190,6 @@ int main(int argc, char* argv[]) {
     size = width * height * 3;
     char* imageArray = &imageVector[0];
 
-    //char* outArray_x = (char*)malloc(size_x * sizeof(char));
-
     // allocate output array for pixels after convolution along x axis
     int height_x = height;
     int width_x = (width - k_size) + 1;
@@ -212,99 +204,98 @@ int main(int argc, char* argv[]) {
     std::cout << "Part 2 finished." << std::endl;
     // define a float pointer to the gaussian kernel
     float* gKernel = (float*)malloc(k_size * sizeof(float));
+    int s = 2 * sigma * sigma;
+    int sum{5};
+
     for (int i = 0; i < k_size; i++) {
-        gKernel[i] = 1 / sqrt(2 * sigma * sigma * (float)PI) * exp(-(i - miu)*(i - miu) / (2 * sigma * sigma));
+        gKernel[i] = 1 / sqrt(s * (float)PI) * exp(-(i - miu+1)*(i - miu+1) / s);
+        //std::cout << gKernel[i] << " | ";
+        sum = sum + gKernel[i];
         //return 0;
     }
+    //return 0;
+    int device{};
+    std::cout << "Host(1) or device(0)?" << std::endl;
+    std::cin >> device;
 
-    std::cout << "Part 3 finished." << std::endl;
-    // -------------------------------------- CPU VERSION ---------------------------------------- //
+    if (device) {
+        // -------------------------------------- CPU VERSION ---------------------------------------- //
 
-    std::cout << "--------------------- CPU version ---------------------" << std::endl;
-    std::cout << "Starts doing convolution on CPU" << std::endl;
+        std::cout << "--------------------- CPU version ---------------------" << std::endl;
+        std::cout << "Starts doing convolution on CPU" << std::endl;
 
-    clock_t start, finish;	//Create timer
-    double duration;
-    start = clock();  // time starts
+        clock_t start, finish;	//Create timer
+        double duration;
+        start = clock();  // time starts
 
-    // do kernel convolution along x axis
-    convolution_x(outArray_x, imageArray, gKernel, height, width, height_x, width_x, k_size);
-    // do kernel convolution along y axis
-    convolution_y(outArray_y, outArray_x, gKernel, height_x, width_x, height_y, width_y, k_size);
+        // do kernel convolution along x axis
+        host_convolve_x(outArray_x, imageArray, gKernel, width, height_x, width_x, k_size);
+        // do kernel convolution along y axis
+        host_convolve_y(outArray_y, outArray_x, gKernel, width_x, height_y, width_y, k_size);
 
-    finish = clock();  // time ends
-    duration = (double)(finish - start) / CLOCKS_PER_SEC;
-    std::cout << "It takes " << duration << " s to do the CPU based convolution!" << std::endl;
+        finish = clock();  // time ends
+        duration = (double)(finish - start) / CLOCKS_PER_SEC;
+        std::cout << "It takes " << duration << " s to do the CPU based convolution!" << std::endl;
+        write_tga("outy.tga", outArray_y, width_y, height_y);
+        std::cout << "Convolution on CPU finished" << std::endl;
+        //// -------------------------------------- CPU VERSION ---------------------------------------- //
+    }
+    else {
+        //// -------------------------------------- GPU VERSION ---------------------------------------- //
 
-    //// output the ppm after convolution along x axis
-    ////char outFile_x[50] = "./src/cpu_out_x.ppm";
-    write_tga("outy.tga", outArray_y, width, height);
-    ////writePPM(outFile_x, outArray_x, pSix, &width_x, &height_x, &maximum, &size_x);
-    //// output the ppm after convolution along x and y axis
-    ////char outFile[50] = "./src/cpu_out.ppm";
-    ////writePPM(outFile, outArray_y, pSix, &width_y, &height_y, &maximum, &size_y);
+        std::cout << "--------------------- GPU version ---------------------" << std::endl;
+        cudaDeviceProp props;																//declare a CUDA properties structure
+        HANDLE_ERROR(cudaGetDeviceProperties(&props, 0));									//get the properties of the first CUDA device
 
-    std::cout << "Convolution on CPU finished" << std::endl;
-    //149.525
-    // -------------------------------------- CPU VERSION ---------------------------------------- //
+        float* gpu_gKernel;																	//pointer to the gaussian kernel
+        char* gpu_inArray;  																//pointer to input array (image)
+        char* gpu_outArray_x;  																//pointer to output Array after convolution along x
+        char* gpu_outArray_y;  																//pointer to output Array after all the convolution
 
-    // -------------------------------------- GPU VERSION ---------------------------------------- //
+        std::cout << "size: " << size << std::endl;
 
-    std::cout << "--------------------- GPU version ---------------------" << std::endl;
-    cudaDeviceProp props;																//declare a CUDA properties structure
-    HANDLE_ERROR(cudaGetDeviceProperties(&props, 0));									//get the properties of the first CUDA device
+        HANDLE_ERROR(cudaMalloc(&gpu_gKernel, k_size * sizeof(float)));  							//allocate memory on device
+        HANDLE_ERROR(cudaMalloc(&gpu_inArray, size * sizeof(char)));  							    //allocate memory on device
+        HANDLE_ERROR(cudaMalloc(&gpu_outArray_x, size_x * sizeof(char)));  							//allocate memory on device
+        HANDLE_ERROR(cudaMalloc(&gpu_outArray_y, size_y * sizeof(char)));  							//allocate memory on device
 
-    float* gpu_gKernel;																				//pointer to the gaussian kernel
-    char* gpu_inArray;  																	//pointer to input Array
-    char* gpu_outArray_x;  																//pointer to output Array after convolution along x
-    char* gpu_outArray_y;  																//pointer to output Array after all the convolution
+        HANDLE_ERROR(cudaMemcpy(gpu_gKernel, gKernel, k_size * sizeof(float), cudaMemcpyHostToDevice));  //copy the array from main memory to device
+        HANDLE_ERROR(cudaMemcpy(gpu_inArray, imageArray, size * sizeof(char), cudaMemcpyHostToDevice));     //copy the array from main memory to device
 
-    std::cout << "size: " << size << std::endl;
-
-    HANDLE_ERROR(cudaMalloc(&gpu_gKernel, k_size * sizeof(float)));  							//allocate memory on device
-    HANDLE_ERROR(cudaMalloc(&gpu_inArray, size * sizeof(char)));  							    //allocate memory on device
-    HANDLE_ERROR(cudaMalloc(&gpu_outArray_x, size_x * sizeof(char)));  							//allocate memory on device
-    HANDLE_ERROR(cudaMalloc(&gpu_outArray_y, size_y * sizeof(char)));  							//allocate memory on device
-
-    HANDLE_ERROR(cudaMemcpy(gpu_gKernel, gKernel, k_size * sizeof(float), cudaMemcpyHostToDevice));  //copy the array from main memory to device
-    HANDLE_ERROR(cudaMemcpy(gpu_inArray, imageArray, size * sizeof(char), cudaMemcpyHostToDevice));     //copy the array from main memory to device
-
-    size_t blockDim = sqrt(props.maxThreadsPerBlock);
-    dim3 threads(blockDim, blockDim);
-    std::cout << "threads.x: " << threads.x << std::endl;
-    std::cout << "threads.y: " << threads.y << std::endl;
-    dim3 blocks(width / threads.x + 1, height / threads.y + 1);
+        size_t blockDim = sqrt(props.maxThreadsPerBlock);
+        dim3 threads(blockDim, blockDim);
+        std::cout << "threads.x: " << threads.x << std::endl;
+        std::cout << "threads.y: " << threads.y << std::endl;
+        dim3 blocks(width / threads.x + 1, height / threads.y + 1);
 
 
-    // without shared memory
-    std::cout << "Starts doing convolution on GPU without shared memory" << std::endl;
+        // without shared memory
+        std::cout << "Convolving on GPU..." << std::endl;
 
-    //	utilize cudaEvent_t to serve as GPU timer
-    cudaEvent_t d_start;
-    cudaEvent_t d_stop;
-    cudaEventCreate(&d_start);
-    cudaEventCreate(&d_stop);
-    cudaEventRecord(d_start, NULL);
+        // utilize cudaEvent_t to serve as GPU timer
+        cudaEvent_t d_start;
+        cudaEvent_t d_stop;
+        cudaEventCreate(&d_start);
+        cudaEventCreate(&d_stop);
+        cudaEventRecord(d_start, NULL);
 
-    kernelConvolution_x_ns <<<blocks, threads >> > (gpu_outArray_x, gpu_inArray, gpu_gKernel, height, width, height_x, width_x, k_size);
-    kernelConvolution_y_ns <<<blocks, threads >> > (gpu_outArray_y, gpu_outArray_x, gpu_gKernel, height_x, width_x, height_y, width_y, k_size);
+        dev_convolve_x << <blocks, threads >> > (gpu_outArray_x, gpu_inArray, gpu_gKernel, height, width, height_x, width_x, k_size);
+        dev_convolve_y << <blocks, threads >> > (gpu_outArray_y, gpu_outArray_x, gpu_gKernel, height_x, width_x, height_y, width_y, k_size);
 
-    HANDLE_ERROR(cudaMemcpy(outArray_x, gpu_outArray_x, size_x * sizeof(char), cudaMemcpyDeviceToHost));  //copy the array back from device to main memory
-    HANDLE_ERROR(cudaMemcpy(outArray_y, gpu_outArray_y, size_y * sizeof(char), cudaMemcpyDeviceToHost));  //copy the array back from device to main memory
+        HANDLE_ERROR(cudaMemcpy(outArray_x, gpu_outArray_x, size_x * sizeof(char), cudaMemcpyDeviceToHost));  //copy the array back from device to main memory
+        HANDLE_ERROR(cudaMemcpy(outArray_y, gpu_outArray_y, size_y * sizeof(char), cudaMemcpyDeviceToHost));  //copy the array back from device to main memory
 
-    //	end of cudaEvent_t, calculate the time and show
-    cudaEventRecord(d_stop, NULL);
-    cudaEventSynchronize(d_stop);
-    float elapsedTime;
-    cudaEventElapsedTime(&elapsedTime, d_start, d_stop);
-    std::cout << "It takes " << elapsedTime << " ms to do the GPU based convolution!" << std::endl;
+        //	end of cudaEvent_t, calculate the time and show
+        cudaEventRecord(d_stop, NULL);
+        cudaEventSynchronize(d_stop);
+        float elapsedTime;
+        cudaEventElapsedTime(&elapsedTime, d_start, d_stop);
+        std::cout << "It takes " << elapsedTime << " ms to do the GPU based convolution!" << std::endl;
 
-    // output ppm file
-    char outFile_gpu_x_ns[50] = "./src/gpu_out_x_ns.ppm";
-    write_tga("out_GPU_x.tga", outArray_x, width_x, height_x);
-    char outFile_gpu_ns[50] = "./src/gpu_out_ns.ppm";
-    write_tga("out_GPU_y.tga", outArray_x, width_x, height_x);
+        // output file
+        //write_tga("out_GPU_x.tga", outArray_x, width_x, height_x);
+        write_tga("out_GPU_y.tga", outArray_y, width_y, height_y);
 
-    std::cout << "Convolution on GPU without shared memory finished" << std::endl;
-
+        std::cout << "Convolution on GPU finished" << std::endl;
+    }
 }
