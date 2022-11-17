@@ -15,9 +15,8 @@ static void HandleError(cudaError_t err, const char* file, int line) {
 }
 #define HANDLE_ERROR( err ) (HandleError( err, __FILE__, __LINE__ )) 
 
-// ------------------------------------------------------------------------------------------- //
 
-// convolution along x on device
+// convolution on device along x axis
 __global__ void dev_conv_x(char* out, char* img, float* kernel, int img_h, int img_w, int out_h, int out_w, int K) {
     size_t i = blockDim.y * blockIdx.y + threadIdx.y;	            // row index
     size_t j = blockDim.x * blockIdx.x + threadIdx.x;	            // column index
@@ -41,7 +40,7 @@ __global__ void dev_conv_x(char* out, char* img, float* kernel, int img_h, int i
     out[3 * (i * out_w + j) + 2] = conv[2];
 }
 
-//  convolution along y on device (same algorithm as dev_conv_x)
+//  convolution on device along y axis (same algorithm as dev_conv_x)
 __global__ void dev_conv_y(char* out, char* img, float* kernel, int img_h, int img_w, int out_h, int out_w, int K) {
     size_t i = blockDim.y * blockIdx.y + threadIdx.y;
     size_t j = blockDim.x * blockIdx.x + threadIdx.x;
