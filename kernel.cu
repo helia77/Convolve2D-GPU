@@ -64,6 +64,7 @@ __global__ void dev_conv_y(char* out, char* img, float* kernel, int img_w, int o
 // ------------------------------------------------------------------------------------------- //
 
 // convolution on device (using shared memory) along x axis
+// It still needs to be fixed for edge handling!
 __global__ void dev_conv_x_shared(char* out, char* img, float* kernel, int img_w, int out_h, int out_w, int k_size) {
     extern __shared__ unsigned char sh_ptr[];              // pointer to shared memory
     size_t i = blockDim.y * blockIdx.y + threadIdx.y;   // row index
@@ -101,6 +102,7 @@ __global__ void dev_conv_x_shared(char* out, char* img, float* kernel, int img_w
     out[3 * (i * out_w + j) + 2] = conv[2];
 }
 
+// It still needs to be fixed for edge handling!
 // convolution on device (using shared memory) along y axis (same algorithm as dev_conv_x_shared)
 __global__ void dev_conv_y_shared(char* out, char* img, float* kernel, int img_w, int out_h, int out_w, int k_size) {
     extern __shared__ unsigned char sh_ptr[];              // pointer to shared memory
@@ -158,9 +160,9 @@ void host_conv_x(char* out, char* img, float* kernel, int img_w, int out_h, int 
                 conv[1] += (unsigned char)img[3 * (i * img_w + j + k) + 1] * kernel[k];
                 conv[2] += (unsigned char)img[3 * (i * img_w + j + k) + 2] * kernel[k];
             }
-            out[3 * (i * out_w + j)] = conv[0];
-            out[3 * (i * out_w + j) + 1] = conv[1];
-            out[3 * (i * out_w + j) + 2] = conv[2];
+            out[3 * (i * out_w + j)] = (unsigned char)conv[0];
+            out[3 * (i * out_w + j) + 1] = (unsigned char)conv[1];
+            out[3 * (i * out_w + j) + 2] = (unsigned char)conv[2];
         }
     }
 }
@@ -179,13 +181,12 @@ void host_conv_y(char* out, char* img, float* kernel, int img_w, int out_h, int 
                 conv[1] += (unsigned char)img[3 * ((i + k) * img_w + j) + 1] * kernel[k];
                 conv[2] += (unsigned char)img[3 * ((i + k) * img_w + j) + 2] * kernel[k];
             }
-            out[3 * (i * out_w + j)] = conv[0];
-            out[3 * (i * out_w + j) + 1] = conv[1];
-            out[3 * (i * out_w + j) + 2] = conv[2];
+            out[3 * (i * out_w + j)] = (unsigned char)conv[0];
+            out[3 * (i * out_w + j) + 1] = (unsigned char)conv[1];
+            out[3 * (i * out_w + j) + 2] = (unsigned char)conv[2];
         }
     }
 }
-
 
 // ------------------------------------------------------------------------------------------- //
 
@@ -323,7 +324,7 @@ int main(int argc, char* argv[]) {
     write_tga("CPU_Output.tga", y_output, y_width, y_height);
     std::cout << "Convolution on CPU finished." << std::endl;
     std::cout << "-------------------------------------------------------" << std::endl;
-    //// -------------------------------------- CPU ---------------------------------------- //
+    // ------------------------------------------ CPU -------------------------------------------- //
 
 
 
