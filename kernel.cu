@@ -15,9 +15,10 @@ static void HandleError(cudaError_t err, const char* file, int line) {
 }
 #define HANDLE_ERROR( err ) (HandleError( err, __FILE__, __LINE__ )) 
 
+// ------------------------------------------------------------------------------------------- //
 
-// convolution on device along x axis
-__global__ void dev_conv_x(char* out, char* img, float* kernel, int img_h, int img_w, int out_h, int out_w, int K) {
+// convolution on device (without shared memory) along x axis
+__global__ void dev_conv_x(char* out, char* img, float* kernel, int img_w, int out_h, int out_w, int K) {
     size_t i = blockDim.y * blockIdx.y + threadIdx.y;	            // row index
     size_t j = blockDim.x * blockIdx.x + threadIdx.x;	            // column index
 
@@ -40,8 +41,8 @@ __global__ void dev_conv_x(char* out, char* img, float* kernel, int img_h, int i
     out[3 * (i * out_w + j) + 2] = conv[2];
 }
 
-//  convolution on device along y axis (same algorithm as dev_conv_x)
-__global__ void dev_conv_y(char* out, char* img, float* kernel, int img_h, int img_w, int out_h, int out_w, int K) {
+//  convolution on device (without shared memory) along y axis (same algorithm as dev_conv_x)
+__global__ void dev_conv_y(char* out, char* img, float* kernel, int img_w, int out_h, int out_w, int K) {
     size_t i = blockDim.y * blockIdx.y + threadIdx.y;
     size_t j = blockDim.x * blockIdx.x + threadIdx.x;
 
@@ -60,12 +61,89 @@ __global__ void dev_conv_y(char* out, char* img, float* kernel, int img_h, int i
     out[3 * (i * out_w + j) + 2] = conv[2];
 }
 
+// ------------------------------------------------------------------------------------------- //
+
+// convolution on device (using shared memory) along x axis
+__global__ void dev_conv_x_shared(char* out, char* img, float* kernel, int img_w, int out_h, int out_w, int k_size) {
+    extern __shared__ unsigned char sh_ptr[];              // pointer to shared memory
+    size_t i = blockDim.y * blockIdx.y + threadIdx.y;   // row index
+    size_t j = blockDim.x * blockIdx.x + threadIdx.x;   // column index
+    if (i >= out_h || j >= out_w) return;
+
+
+    size_t shared_i = threadIdx.y;							// row index withing the block (shared memory)
+    size_t shared_j = threadIdx.x;							// column index within the block (shared memory)
+
+    int data = blockDim.x + k_size - 1;							// calculate the # of elements to copy​
+
+    // copy data to shared memory (lecture 8.1 - s14)
+    for (int s = shared_j; s < data; s += blockDim.x) {
+        sh_ptr[3 * (shared_i * data + s)] = (unsigned char)img[3 * (i * img_w + blockDim.x * blockIdx.x + s)];
+        sh_ptr[3 * (shared_i * data + s) + 1] = (unsigned char)img[3 * (i * img_w + blockDim.x * blockIdx.x + s) + 1];
+        sh_ptr[3 * (shared_i * data + s) + 2] = (unsigned char)img[3 * (i * img_w + blockDim.x * blockIdx.x + s) + 2];
+    }
+    __syncthreads();        //synch everything in the block
+
+    // initialize the register conv to store results
+    float conv[3];
+    for (int x = 0; x < 3; x++) {
+        conv[x] = 0;
+    }
+    // convolve with Gaussian kernel along x axis using shared memory
+    for (int k = 0; k < k_size; k++) {
+        conv[0] += sh_ptr[3 * (shared_i * data + shared_j + k)] * kernel[k];
+        conv[1] += sh_ptr[3 * (shared_i * data + shared_j + k) + 1] * kernel[k];
+        conv[2] += sh_ptr[3 * (shared_i * data + shared_j + k) + 2] * kernel[k];
+    }
+    // copy results from register to output
+    out[3 * (i * out_w + j)] = conv[0];
+    out[3 * (i * out_w + j) + 1] = conv[1];
+    out[3 * (i * out_w + j) + 2] = conv[2];
+}
+
+// convolution on device (using shared memory) along y axis (same algorithm as dev_conv_x_shared)
+__global__ void dev_conv_y_shared(char* out, char* img, float* kernel, int img_w, int out_h, int out_w, int k_size) {
+    extern __shared__ unsigned char sh_ptr[];              // pointer to shared memory
+    size_t i = blockDim.y * blockIdx.y + threadIdx.y;   // row index
+    size_t j = blockDim.x * blockIdx.x + threadIdx.x;   // column index
+    if (i >= out_h || j >= out_w) return;
+
+
+    size_t shared_i = threadIdx.y;							// row index withing the block (shared memory)
+    size_t shared_j = threadIdx.x;							// column index within the block (shared memory)
+
+    int data = blockDim.y + k_size - 1;							// calculate the # of elements to copy​
+
+    // copy data to shared memory (lecture 8.1 - s14)
+    for (int s = shared_i; s < data; s += blockDim.y) {
+        sh_ptr[3 * (s * blockDim.x + shared_j)] = (unsigned char)img[3 * ((blockDim.y * blockIdx.y + s) * img_w + j)];
+        sh_ptr[3 * (s * blockDim.x + shared_j) + 1] = (unsigned char)img[3 * ((blockDim.y * blockIdx.y + s) * img_w + j) + 1];
+        sh_ptr[3 * (s * blockDim.x + shared_j) + 2] = (unsigned char)img[3 * ((blockDim.y * blockIdx.y + s) * img_w + j) + 2];
+    }
+    __syncthreads();        //synch everything in the block
+
+    // initialize the register conv to store results
+    float conv[3];
+    for (int x = 0; x < 3; x++) {
+        conv[x] = 0;
+    }
+    // convolve with Gaussian kernel along x axis using shared memory
+    for (int k = 0; k < k_size; k++) {
+        conv[0] += sh_ptr[3 * ((shared_i + k) * blockDim.x + shared_j)] * kernel[k];
+        conv[1] += sh_ptr[3 * ((shared_i + k) * blockDim.x + shared_j) + 1] * kernel[k];
+        conv[2] += sh_ptr[3 * ((shared_i + k) * blockDim.x + shared_j) + 2] * kernel[k];
+    }
+    // copy results from register to output
+    out[3 * (i * out_w + j)] = conv[0];
+    out[3 * (i * out_w + j) + 1] = conv[1];
+    out[3 * (i * out_w + j) + 2] = conv[2];
+}
+
 
 // ------------------------------------------------------------------------------------------- //
 
-
 // convolution along x on host
-void host_conv_x(char* out, char* img, float* kernel, int img_h, int img_w, int out_h, int out_w, int K) {
+void host_conv_x(char* out, char* img, float* kernel, int img_w, int out_h, int out_w, int K) {
     float conv[3];
 
     // i and j being smaller than output's width and height, manage the edges perfectly
@@ -88,7 +166,7 @@ void host_conv_x(char* out, char* img, float* kernel, int img_h, int img_w, int 
 }
 
 // convolution along y on host (same algorithm as host_conv_x)
-void host_conv_y(char* out, char* img, float* kernel, int img_h, int img_w, int out_h, int out_w, int K) {
+void host_conv_y(char* out, char* img, float* kernel, int img_w, int out_h, int out_w, int K) {
     float conv[3];
 
     // i and j being smaller than output's width and height, manage the edges perfectly
@@ -226,8 +304,8 @@ int main(int argc, char* argv[]) {
 
 
     // running on host and device
-
-    // -------------------------------------- CPU ---------------------------------------- //
+    
+    // ------------------------------------------ CPU -------------------------------------------- //
 
     std::cout << "\n------------------------- CPU -------------------------" << std::endl;
     std::cout << "Convolving on HOST..." << std::endl;
@@ -236,9 +314,9 @@ int main(int argc, char* argv[]) {
     start = clock();
 
     // convolving along x
-    host_conv_x(x_output, imageArray, gKernel, height, width, x_height, x_width, k_size);
+    host_conv_x(x_output, imageArray, gKernel, width, x_height, x_width, k_size);
     // convolving along y 
-    host_conv_y(y_output, x_output, gKernel, x_height, x_width, y_height, y_width, k_size);
+    host_conv_y(y_output, x_output, gKernel, x_width, y_height, y_width, k_size);
 
     stop = clock();  // time finishs
     std::cout << "Takes " << (double)(stop - start) / CLOCKS_PER_SEC << " s to convolve on CPU" << std::endl;
@@ -250,9 +328,9 @@ int main(int argc, char* argv[]) {
 
 
 
-    //// -------------------------------------- GPU ---------------------------------------- //
+    // -------------------------------------- GPU (without shared memory) ---------------------------------------- //
 
-    std::cout << "\n------------------------- GPU -------------------------" << std::endl;
+    std::cout << "\n------------------------- GPU (without shared memory) -------------------------" << std::endl;
     int d;
     HANDLE_ERROR(cudaGetDevice(&d));
     std::cout << "Current device: " << d << std::endl;
@@ -287,11 +365,11 @@ int main(int argc, char* argv[]) {
     cudaEventRecord(g_start, NULL);
 
 
-    std::cout << "Convolving on DEVICE..." << std::endl;
+    std::cout << "Convolving on DEVICE without shared memory..." << std::endl;
     // convolving along x
-    dev_conv_x <<< blocks, threads >>> (gpu_output_x, gpu_image, gpu_gKernel, height, width, x_height, x_width, k_size);
+    dev_conv_x <<< blocks, threads >>> (gpu_output_x, gpu_image, gpu_gKernel, width, x_height, x_width, k_size);
     // convolving along y
-    dev_conv_y <<< blocks, threads >>> (gpu_output_y, gpu_output_x, gpu_gKernel, x_height, x_width, y_height, y_width, k_size);
+    dev_conv_y <<< blocks, threads >>> (gpu_output_y, gpu_output_x, gpu_gKernel, x_width, y_height, y_width, k_size);
 
         
 
@@ -303,12 +381,50 @@ int main(int argc, char* argv[]) {
     cudaEventSynchronize(g_stop);
     float eTime;
     cudaEventElapsedTime(&eTime, g_start, g_stop);
-    std::cout << "Takes " << eTime << " ms to convolve on GPU" << std::endl;
+    std::cout << "Takes " << eTime << " ms to convolve on GPU (without shared memory)" << std::endl;
 
     // write the output file as targa
-    write_tga("GPU_Output.tga", y_output, y_width, y_height);
+    write_tga("GPU_Output_NoSharedM.tga", y_output, y_width, y_height);
 
-    std::cout << "Convolution on GPU finished." << std::endl;
+    std::cout << "Convolution on GPU without shared memory finished." << std::endl;
     std::cout << "-------------------------------------------------------" << std::endl;
-    //// -------------------------------------- GPU ---------------------------------------- //
+    /*-----------------------------------------------------------------------------------------------------------*/
+
+
+
+
+    // -------------------------------------- GPU (using shared memory) ---------------------------------------- //
+    std::cout << "\n------------------------- GPU (using shared memory) -------------------------" << std::endl;
+
+    // calculate the size of shared memory
+    size_t shared_m = 3 * blockDim * (blockDim + k_size - 1) * sizeof(char);
+    std::cout << "\nShare Memory: " << shared_m << std::endl;
+    if (prop.sharedMemPerBlock < shared_m) {
+        std::cout << "Error: Not enough shared memory." << std::endl;
+        exit(1);
+    }
+
+    cudaEventCreate(&g_start);
+    cudaEventCreate(&g_stop);
+    cudaEventRecord(g_start, NULL);
+
+    dev_conv_x_shared << <blocks, threads, shared_m >> > (gpu_output_x, gpu_image, gpu_gKernel, width, x_height, x_width, k_size);
+    dev_conv_y_shared << <blocks, threads, shared_m >> > (gpu_output_y, gpu_output_x, gpu_gKernel, x_width, y_height, y_width, k_size);
+
+    HANDLE_ERROR(cudaMemcpy(y_output, gpu_output_y, y_size * sizeof(char), cudaMemcpyDeviceToHost));  //copy the array back from device to main memory
+
+    // GPU timer ends
+    cudaEventRecord(g_stop, NULL);
+    cudaEventSynchronize(g_stop);
+    eTime = 0.0f;
+    cudaEventElapsedTime(&eTime, g_start, g_stop);
+    std::cout << "Takes " << eTime << " ms to convolve on GPU (using shared memory)" << std::endl;
+
+    // write the output file as targa
+    write_tga("GPU_Output_sharedM.tga", y_output, y_width, y_height);
+
+    std::cout << "Convolution on GPU without shared memory finished." << std::endl;
+
+
+    /* ------------------------------------------------------------------------------------------------------------ */
 }
